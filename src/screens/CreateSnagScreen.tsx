@@ -1,0 +1,616 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
+  Modal,
+  FlatList,
+  TouchableWithoutFeedback,
+} from 'react-native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useQueryClient } from '@tanstack/react-query';
+import { RootStackParamList } from '../types/navigation';
+import { SnagPriority } from '../types/database';
+import { supabase } from '../lib/supabase';
+
+type Props = NativeStackScreenProps<RootStackParamList, 'CreateSnag'>;
+
+interface UserOption {
+  id: string;
+  full_name: string;
+  role: string;
+  company_id?: string;
+}
+
+const PRIORITIES: { label: string; value: SnagPriority; color: string }[] = [
+  { label: 'Düşük', value: 'low', color: '#0dcaf0' },
+  { label: 'Orta', value: 'medium', color: '#fd7e14' },
+  { label: 'Yüksek', value: 'high', color: '#dc3545' },
+  { label: 'Kritik', value: 'critical', color: '#842029' },
+];
+
+function getTurkishRole(role: string): string {
+  switch (role?.toLowerCase()) {
+    case 'admin':
+      return 'Sistem Yöneticisi';
+    case 'manager':
+      return 'Şantiye Şefi / Proje Müdürü';
+    case 'engineer':
+      return 'Saha Kontrol Mühendisi';
+    case 'subcontractor':
+      return 'Taşeron Firma / Usta Başı';
+    default:
+      return 'Saha Görevlisi';
+  }
+}
+
+function normalizeText(text: string): string {
+  return (text || '')
+    .toLocaleLowerCase('tr-TR')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+export default function CreateSnagScreen({ route, navigation }: Props) {
+  const queryClient = useQueryClient();
+  const editSnagId = route.params?.snagId;
+  const isEditMode = Boolean(editSnagId);
+
+  // Form State'leri
+  const [title, setTitle] = useState('');
+  const [locationName, setLocationName] = useState('');
+  const [locationId, setLocationId] = useState<string | null>(null);
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState<SnagPriority>('medium');
+
+  // Kullanıcı Seçim State'leri
+  const [users, setUsers] = useState<UserOption[]>([]);
+  const [selectedUser, setSelectedUser] = useState<UserOption | null>(null);
+  const [userModalVisible, setUserModalVisible] = useState(false);
+  const [userSearchText, setUserSearchText] = useState('');
+  
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    navigation.setOptions({
+      title: isEditMode ? 'Kusur Kaydını Düzenle' : 'Yeni Kusur Bildirimi',
+    });
+    loadAllData();
+  }, [isEditMode, editSnagId]);
+
+  async function loadAllData() {
+    setLoading(true);
+    try {
+      // 1. Tüm personelleri çek
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('id, full_name, role, company_id')
+        .order('full_name', { ascending: true });
+
+      if (userError) throw userError;
+      const userList = (userData as UserOption[]) || [];
+      setUsers(userList);
+
+      // 2. Eğer Düzenleme Modu ise: Mevcut Kusurun TÜM bilgilerini eksiksiz çek ve form kutularına doldur
+      if (editSnagId) {
+        const { data: snag, error: snagErr } = await supabase
+          .from('snags')
+          .select('id, title, description, priority, location_id, assigned_to_user_id, locations(id, title)')
+          .eq('id', editSnagId)
+          .single();
+
+        if (snagErr) {
+          Alert.alert('Hata', 'Kusur detayları yüklenemedi.');
+        } else if (snag) {
+          setTitle(snag.title || '');
+          setDescription(snag.description || '');
+          setPriority((snag.priority as SnagPriority) || 'medium');
+
+          const loc = snag.locations as unknown as { id: string; title: string } | null;
+          setLocationName(loc?.title || '');
+          setLocationId(loc?.id || snag.location_id || null);
+
+          if (snag.assigned_to_user_id) {
+            const foundUser = userList.find((u) => u.id === snag.assigned_to_user_id);
+            if (foundUser) {
+              setSelectedUser(foundUser);
+            }
+          }
+        }
+      } else {
+        // Yeni kayıt açılıyorsa varsayılan ilk kullanıcıyı ata
+        if (userList.length > 0) {
+          setSelectedUser(userList[0]);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Hata', 'Veriler yüklenirken bir problem oluştu.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const filteredUsers = useMemo(() => {
+    const query = normalizeText(userSearchText);
+    if (!query) return users;
+    return users.filter((u) => normalizeText(u.full_name).includes(query));
+  }, [users, userSearchText]);
+
+  async function handleSave() {
+    if (!title.trim()) {
+      Alert.alert('Eksik Bilgi', 'Lütfen kusur başlığını yazınız.');
+      return;
+    }
+    if (!locationName.trim()) {
+      Alert.alert('Eksik Bilgi', 'Lütfen şantiye konumunu belirtiniz.');
+      return;
+    }
+    if (!description.trim()) {
+      Alert.alert('Eksik Bilgi', 'Lütfen açıklama ve detayları giriniz.');
+      return;
+    }
+    if (!selectedUser) {
+      Alert.alert('Eksik Bilgi', 'Lütfen atanacak bir sorumlu seçiniz.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      let finalLocationId = locationId;
+
+      // Konum bilgisini güncelle veya yeni konum ID'si üret
+      if (isEditMode && locationId) {
+        await supabase
+          .from('locations')
+          .update({ title: locationName.trim() })
+          .eq('id', locationId);
+      } else {
+        const { data: locData } = await supabase
+          .from('locations')
+          .insert([
+            {
+              title: locationName.trim(),
+              company_id: selectedUser.company_id || '11111111-1111-1111-1111-111111111111',
+            },
+          ])
+          .select()
+          .single();
+
+        if (locData) {
+          finalLocationId = locData.id;
+        }
+      }
+
+      if (isEditMode && editSnagId) {
+        // TÜM DEĞİŞİKLİKLERİ SUPABASE'DE GÜNCELLE (UPDATE)
+        const { error } = await supabase
+          .from('snags')
+          .update({
+            title: title.trim(),
+            description: description.trim(),
+            priority: priority,
+            location_id: finalLocationId || undefined,
+            assigned_to_user_id: selectedUser.id,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editSnagId);
+     if (error) {
+  Alert.alert('Hata', error.message);
+} else {
+  // 1. Liste ekranını yenile
+  await queryClient.invalidateQueries({ queryKey: ['snags'] });
+  // 2. Detay ekranının önbelleğini zorla yenile
+  if (editSnagId) {
+    await queryClient.invalidateQueries({ queryKey: ['snag', editSnagId] });
+  }
+  Alert.alert('Başarılı', 'Kusur kaydı başarıyla güncellendi.', [
+    { text: 'Tamam', onPress: () => navigation.goBack() },
+  ]);
+}} else {
+        // YENİ KUSUR KAYDI OLUŞTUR (INSERT)
+        const { error } = await supabase.from('snags').insert([
+          {
+            company_id: selectedUser.company_id || '11111111-1111-1111-1111-111111111111',
+            location_id: finalLocationId || '55555555-5555-5555-5555-555555555555',
+            title: title.trim(),
+            description: description.trim(),
+            priority: priority,
+            status: 'open',
+            assigned_to_user_id: selectedUser.id,
+            created_by_user_id: '22222222-2222-2222-2222-222222222222',
+          },
+        ]);
+
+        if (error) {
+          Alert.alert('Hata', error.message);
+        } else {
+          await queryClient.invalidateQueries({ queryKey: ['snags'] });
+          Alert.alert('Başarılı', 'Yeni hasar kaydı başarıyla oluşturuldu.', [
+            { text: 'Tamam', onPress: () => navigation.goBack() },
+          ]);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Hata', 'Kayıt sırasında bir problem oluştu.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#0056b3" />
+        <Text style={styles.loadingText}>Mevcut bilgiler getiriliyor...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.card}>
+        <Text style={styles.label}>1. Kusur Başlığı *</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Örn: Yangın Merdiveni Korkuluk Gevşekliği"
+          value={title}
+          onChangeText={setTitle}
+        />
+
+        <Text style={styles.label}>2. Konum / Alan *</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Örn: B Blok - 3. Kat - Yangın Çıkışı"
+          value={locationName}
+          onChangeText={setLocationName}
+        />
+
+        <Text style={styles.label}>3. Açıklama & Detaylar *</Text>
+        <TextInput
+          style={[styles.input, styles.textArea]}
+          placeholder="Kusuru, yapılması gereken imalatı ve detayları yazın..."
+          multiline
+          numberOfLines={4}
+          value={description}
+          onChangeText={setDescription}
+        />
+
+        <Text style={styles.label}>4. Öncelik / Aciliyet Seviyesi</Text>
+        <View style={styles.priorityGrid}>
+          {PRIORITIES.map((p) => {
+            const isSelected = priority === p.value;
+            return (
+              <TouchableOpacity
+                key={p.value}
+                style={[
+                  styles.priorityBtn,
+                  isSelected && { backgroundColor: p.color, borderColor: p.color },
+                ]}
+                onPress={() => setPriority(p.value)}
+              >
+                <Text style={[styles.priorityText, isSelected && styles.priorityTextActive]}>
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <Text style={styles.label}>5. Atanacak Sorumlu Kişi / Taşeron *</Text>
+        <TouchableOpacity
+          style={styles.dropdownBtn}
+          onPress={() => {
+            setUserSearchText('');
+            setUserModalVisible(true);
+          }}
+        >
+          <View style={styles.dropdownContent}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.dropdownSelectedName}>
+                {selectedUser ? selectedUser.full_name : 'Sorumlu Seçiniz'}
+              </Text>
+              {selectedUser && (
+                <Text style={styles.dropdownSelectedRole}>
+                  Görevi: {getTurkishRole(selectedUser.role)}
+                </Text>
+              )}
+            </View>
+            <Text style={styles.dropdownArrow}>▼</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.submitBtn, saving && styles.submitBtnDisabled]}
+        disabled={saving}
+        onPress={handleSave}
+      >
+        {saving ? (
+          <ActivityIndicator color="#ffffff" />
+        ) : (
+          <Text style={styles.submitBtnText}>
+            {isEditMode ? 'Değişiklikleri Güncelle' : 'Kaydı Kaydet ve Gönder'}
+          </Text>
+        )}
+      </TouchableOpacity>
+
+      {/* Sorumlu Seçim Modal Penceresi */}
+      <Modal
+        visible={userModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setUserModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setUserModalVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.modalContainer}>
+                <Text style={styles.modalTitle}>👷 Sorumlu Personel Seçiniz</Text>
+
+                <TextInput
+                  style={styles.modalSearchInput}
+                  placeholder="🔍 Personel ismi ara..."
+                  value={userSearchText}
+                  onChangeText={setUserSearchText}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                />
+
+                <FlatList
+                  data={filteredUsers}
+                  keyExtractor={(item) => item.id}
+                  keyboardShouldPersistTaps="always"
+                  ItemSeparatorComponent={() => <View style={styles.modalDivider} />}
+                  ListEmptyComponent={
+                    <Text style={styles.emptyListText}>
+                      "{userSearchText}" isminde personel bulunamadı.
+                    </Text>
+                  }
+                  renderItem={({ item }) => {
+                    const isSelected = selectedUser?.id === item.id;
+                    return (
+                      <TouchableOpacity
+                        style={[styles.userItem, isSelected && styles.userItemSelected]}
+                        onPress={() => {
+                          setSelectedUser(item);
+                          setUserModalVisible(false);
+                        }}
+                      >
+                        <View>
+                          <Text style={[styles.userName, isSelected && styles.userNameActive]}>
+                            {item.full_name}
+                          </Text>
+                          <Text style={styles.userRole}>
+                            Görevi: {getTurkishRole(item.role)}
+                          </Text>
+                        </View>
+                        {isSelected && <Text style={styles.checkMark}>✓</Text>}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+
+                <TouchableOpacity
+                  style={styles.modalCloseBtn}
+                  onPress={() => setUserModalVisible(false)}
+                >
+                  <Text style={styles.modalCloseText}>Vazgeç / Kapat</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f4f6f9',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#6c757d',
+    fontSize: 14,
+  },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 18,
+    elevation: 3,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#343a40',
+    marginBottom: 6,
+    marginTop: 14,
+  },
+  input: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    fontSize: 15,
+    color: '#212529',
+  },
+  textArea: {
+    height: 90,
+    textAlignVertical: 'top',
+  },
+  priorityGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  priorityBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    backgroundColor: '#f1f3f5',
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  priorityText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#495057',
+  },
+  priorityTextActive: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  dropdownBtn: {
+    backgroundColor: '#f8f9fa',
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 4,
+  },
+  dropdownContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dropdownSelectedName: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#212529',
+  },
+  dropdownSelectedRole: {
+    fontSize: 12,
+    color: '#6c757d',
+    marginTop: 2,
+  },
+  dropdownArrow: {
+    fontSize: 12,
+    color: '#6c757d',
+    marginLeft: 8,
+  },
+  submitBtn: {
+    backgroundColor: '#0056b3',
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 20,
+    elevation: 3,
+  },
+  submitBtnDisabled: {
+    backgroundColor: '#6c757d',
+  },
+  submitBtnText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    width: '100%',
+    maxHeight: '75%',
+    padding: 18,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#212529',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  modalSearchInput: {
+    backgroundColor: '#f1f3f5',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  emptyListText: {
+    textAlign: 'center',
+    color: '#6c757d',
+    paddingVertical: 20,
+    fontSize: 13,
+  },
+  userItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  userItemSelected: {
+    backgroundColor: '#e7f1ff',
+  },
+  userName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#212529',
+  },
+  userNameActive: {
+    color: '#0056b3',
+    fontWeight: 'bold',
+  },
+  userRole: {
+    fontSize: 12,
+    color: '#6c757d',
+  },
+  checkMark: {
+    fontSize: 16,
+    color: '#0056b3',
+    fontWeight: 'bold',
+  },
+  modalDivider: {
+    height: 1,
+    backgroundColor: '#f1f3f5',
+  },
+  modalCloseBtn: {
+    marginTop: 14,
+    backgroundColor: '#f8f9fa',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+  },
+  modalCloseText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#495057',
+  },
+});

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
   View,
@@ -6,96 +6,115 @@ import {
   Text,
   StatusBar,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { RootStackParamList } from './src/types/navigation';
 import SnagListScreen from './src/screens/SnagListScreen';
 import SnagDetailScreen from './src/screens/SnagDetailScreen';
+import CreateSnagScreen from './src/screens/CreateSnagScreen';
 
+const queryClient = new QueryClient();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-// 🎨 Kurumsal Açılış Ekranı (Splash Screen)
-function CustomSplashScreen() {
-  return (
-    <View style={styles.splashContainer}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-      <View style={styles.logoWrapper}>
-        <Image
-          source={require('./assets/icon.png')}
-          style={styles.logoImage}
-          resizeMode="contain"
-        />
-      </View>
-      <View style={styles.splashFooter}>
-        <ActivityIndicator size="small" color="#0056b3" />
-        <Text style={styles.footerText}>Sistem hazırlanıyor...</Text>
-      </View>
-    </View>
-  );
-}
-
 export default function App() {
-  const [isShowSplash, setIsShowSplash] = useState<boolean>(true);
+  const [splashVisible, setSplashVisible] = useState(true);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    // Building bittikten sonra ekranda 2 saniye net kalır
     const timer = setTimeout(() => {
-      setIsShowSplash(false);
+      // 500ms süren yumuşak saydamlaşma (fade-out) geçişi
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }).start(() => {
+        setSplashVisible(false);
+      });
     }, 2000);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [fadeAnim]);
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
-      {isShowSplash ? (
-        <CustomSplashScreen />
-      ) : (
-        <NavigationContainer>
-          <Stack.Navigator
-            initialRouteName="SnagList"
-            screenOptions={{
-              headerStyle: {
-                backgroundColor: '#ffffff',
-              },
-              headerTitleStyle: {
-                fontWeight: 'bold',
-                color: '#0056b3',
-              },
-              headerTintColor: '#0056b3',
-              headerShadowVisible: false,
-            }}
-          >
-            <Stack.Screen
-              name="SnagList"
-              component={SnagListScreen}
-              options={{
-                title: 'SahaKONTROL',
+      <QueryClientProvider client={queryClient}>
+        <View style={styles.rootContainer}>
+          {/* Ana Uygulama Navigasyonu */}
+          <NavigationContainer>
+            <Stack.Navigator
+              initialRouteName="SnagList"
+              screenOptions={{
+                headerStyle: { backgroundColor: '#ffffff' },
+                headerTitleStyle: { fontWeight: 'bold', color: '#0056b3' },
+                headerTintColor: '#0056b3',
+                headerShadowVisible: false,
               }}
-            />
-            <Stack.Screen
-              name="SnagDetail"
-              component={SnagDetailScreen}
-              options={{
-                title: 'Kusur Detayı',
-              }}
-            />
-          </Stack.Navigator>
-        </NavigationContainer>
-      )}
+            >
+              <Stack.Screen
+                name="SnagList"
+                component={SnagListScreen}
+                options={{ title: 'SahaKONTROL' }}
+              />
+              <Stack.Screen
+                name="SnagDetail"
+                component={SnagDetailScreen}
+                options={{ title: 'Kusur Detayı' }}
+              />
+              <Stack.Screen
+                name="CreateSnag"
+                component={CreateSnagScreen}
+                options={{ title: 'Yeni Kusur Bildirimi' }}
+              />
+            </Stack.Navigator>
+          </NavigationContainer>
+
+          {/* Akıcı Geçişli Açılış Katmanı */}
+          {splashVisible && (
+            <Animated.View
+              style={[
+                styles.splashOverlay,
+                { opacity: fadeAnim },
+              ]}
+              pointerEvents="none"
+            >
+              <View style={styles.logoWrapper}>
+                <Image
+                  source={require('./assets/icon.png')}
+                  style={styles.logoImage}
+                  resizeMode="contain"
+                />
+              </View>
+              <View style={styles.splashFooter}>
+                <ActivityIndicator size="small" color="#0056b3" />
+                <Text style={styles.footerText}>SahaKONTROL Yükleniyor...</Text>
+              </View>
+            </Animated.View>
+          )}
+        </View>
+      </QueryClientProvider>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  splashContainer: {
+  rootContainer: {
     flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  splashOverlay: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: '#ffffff',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 999,
+    elevation: 999,
   },
   logoWrapper: {
     flex: 1,
@@ -104,8 +123,8 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   logoImage: {
-    width: 260,
-    height: 260,
+    width: 220,
+    height: 220,
   },
   splashFooter: {
     paddingBottom: 40,

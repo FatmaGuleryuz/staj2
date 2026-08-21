@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
   StyleSheet,
   Text,
   View,
   ScrollView,
-  ActivityIndicator,
   TouchableOpacity,
+  ActivityIndicator,
   Alert,
 } from 'react-native';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { Snag, SnagStatus } from '../types/database';
@@ -15,157 +16,201 @@ import { supabase } from '../lib/supabase';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SnagDetail'>;
 
-export default function SnagDetailScreen({ route, navigation }: Props) {
-  const { snagId } = route.params;
-  const [snag, setSnag] = useState<Snag | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [updating, setUpdating] = useState<boolean>(false);
-
-  useEffect(() => {
-    fetchDetail();
-  }, [snagId]);
-
-  async function fetchDetail() {
-    try {
-      const { data, error } = await supabase
-        .from('snags')
-        .select(`
-          id,
-          title,
-          description,
-          status,
-          priority,
-          created_at,
-          updated_at,
-          locations ( title ),
-          users!snags_assigned_to_user_id_fkey ( full_name, role )
-        `)
-        .eq('id', snagId)
-        .single();
-
-      if (error) {
-        Alert.alert('Hata', 'Kayıt detayları bulunamadı.');
-        navigation.goBack();
-      } else {
-        setSnag(data as unknown as Snag);
-      }
-    } catch (err) {
-      console.error('Detay çekme hatası:', err);
-    } finally {
-      setLoading(false);
-    }
+function getTurkishRole(role?: string): string {
+  switch (role?.toLowerCase()) {
+    case 'admin':
+      return 'Sistem Yöneticisi';
+    case 'manager':
+      return 'Şantiye Şefi / Proje Müdürü';
+    case 'engineer':
+      return 'Saha Kontrol Mühendisi';
+    case 'subcontractor':
+      return 'Taşeron Firma / Usta Başı';
+    default:
+      return 'Saha Görevlisi';
   }
+}
 
-  async function updateStatus(newStatus: SnagStatus) {
-    setUpdating(true);
-    try {
+function getTurkishStatus(status?: string): string {
+  switch (status) {
+    case 'open':
+      return 'AÇIK';
+    case 'in_progress':
+      return 'İŞLEMDE';
+    case 'resolved':
+      return 'ÇÖZÜLDÜ';
+    case 'approved':
+      return 'ONAYLANDI';
+    default:
+      return (status || '').toUpperCase();
+  }
+}
+
+async function fetchSnagDetail(snagId: string): Promise<Snag> {
+  const { data, error } = await supabase
+    .from('snags')
+    .select(`
+      id,
+      company_id,
+      location_id,
+      title,
+      description,
+      status,
+      priority,
+      assigned_to_user_id,
+      created_by_user_id,
+      image_url,
+      signature_url,
+      created_at,
+      updated_at,
+      locations(title),
+      assigned_user:users!snags_assigned_to_user_id_fkey(full_name, role)
+    `)
+    .eq('id', snagId)
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as unknown as Snag;
+}
+
+export default function SnagDetailScreen({ route }: Props) {
+  const { snagId } = route.params;
+  const queryClient = useQueryClient();
+
+  const { data: snag, isLoading, isError } = useQuery({
+    queryKey: ['snag', snagId],
+    queryFn: () => fetchSnagDetail(snagId),
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async (newStatus: SnagStatus) => {
       const { error } = await supabase
         .from('snags')
-        .update({
-          status: newStatus,
-          updated_at: new Date().toISOString(),
-        })
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', snagId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['snag', snagId] });
+      queryClient.invalidateQueries({ queryKey: ['snags'] });
+      Alert.alert('Başarılı', 'Kusur durumu güncellendi.');
+    },
+    onError: (err: any) => {
+      Alert.alert('Hata', err.message || 'Durum güncellenirken bir sorun oluştu.');
+    },
+  });
 
-      if (error) {
-        Alert.alert('Güncelleme Hatası', error.message);
-      } else {
-        Alert.alert('Başarılı', `Kusur durumu "${newStatus.toUpperCase()}" olarak güncellendi.`);
-        setSnag((prev) => (prev ? { ...prev, status: newStatus } : null));
-      }
-    } catch (err) {
-      console.error('Durum güncelleme hatası:', err);
-    } finally {
-      setUpdating(false);
-    }
-  }
-
-  if (loading) {
+  if (isLoading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#0d6efd" />
-        <Text style={styles.loadingText}>Detaylar Supabase'den alınıyor...</Text>
+        <ActivityIndicator size="large" color="#0056b3" />
+        <Text style={styles.loadingText}>Detaylar yükleniyor...</Text>
       </View>
     );
   }
 
-  if (!snag) return null;
+  if (isError || !snag) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>Kusur detayları yüklenemedi.</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.card}>
-        <Text style={styles.title}>{snag.title}</Text>
-        <Text style={styles.description}>{snag.description}</Text>
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>{snag.title}</Text>
+          <View style={[styles.badge, styles[`badge_${snag.priority}`]]}>
+            <Text style={styles.badgeText}>{snag.priority?.toUpperCase()}</Text>
+          </View>
+        </View>
+
+        <View style={styles.statusContainer}>
+          <Text style={styles.statusLabel}>Mevcut Durum:</Text>
+          <View style={[styles.statusBadge, styles[`statusBadge_${snag.status}`]]}>
+            <Text style={styles.statusBadgeText}>{getTurkishStatus(snag.status)}</Text>
+          </View>
+        </View>
 
         <View style={styles.divider} />
 
-        <View style={styles.row}>
-          <Text style={styles.label}>Aciliyet Seviyesi:</Text>
-          <Text style={[styles.value, styles.priorityText]}>
-            {snag.priority?.toUpperCase()}
-          </Text>
+        <Text style={styles.sectionHeading}>Açıklama & Detaylar</Text>
+        <Text style={styles.descriptionText}>{snag.description}</Text>
+
+        <View style={styles.divider} />
+
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>📍 Konum:</Text>
+          <Text style={styles.metaValue}>{snag.locations?.title || 'Belirtilmedi'}</Text>
         </View>
 
-        <View style={styles.row}>
-          <Text style={styles.label}>Şantiye Konumu:</Text>
-          <Text style={styles.value}>
-            {snag.locations?.title || 'Belirtilmedi'}
-          </Text>
-        </View>
-
-        <View style={styles.row}>
-          <Text style={styles.label}>Görevli Taşeron / Sorumlu:</Text>
-          <Text style={styles.value}>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>👷 Atanan Sorumlu:</Text>
+          <Text style={styles.metaValue}>
             {snag.assigned_user?.full_name || 'Atama Yapılmadı'}
           </Text>
         </View>
 
-        <View style={styles.row}>
-          <Text style={styles.label}>Mevcut Durum:</Text>
-          <Text style={[styles.value, styles.statusText]}>
-            {snag.status?.toUpperCase()}
+        {snag.assigned_user?.role && (
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>💼 Sorumlu Görevi:</Text>
+            <Text style={styles.metaValue}>{getTurkishRole(snag.assigned_user.role)}</Text>
+          </View>
+        )}
+
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>🕒 Kayıt Tarihi:</Text>
+          <Text style={styles.metaValue}>
+            {new Date(snag.created_at).toLocaleDateString('tr-TR', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
           </Text>
         </View>
       </View>
 
-      <Text style={styles.sectionHeader}>📌 Durumu Değiştir</Text>
-
-      <View style={styles.actionsContainer}>
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.btnBlue]}
-          disabled={updating}
-          onPress={() => updateStatus('in_progress')}
-        >
-          {updating ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.actionBtnText}>İşleme Al (In Progress)</Text>
+      {/* Durum Yönetim Butonları */}
+      <View style={styles.actionCard}>
+        <Text style={styles.sectionHeading}>Durum Yönetimi</Text>
+        <View style={styles.actionButtonsRow}>
+          {snag.status === 'open' && (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnProgress]}
+              onPress={() => updateStatusMutation.mutate('in_progress')}
+            >
+              <Text style={styles.btnText}>İşleme Al</Text>
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.btnGreen]}
-          disabled={updating}
-          onPress={() => updateStatus('resolved')}
-        >
-          {updating ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.actionBtnText}>Çözüldü Olarak İşaretle (Resolved)</Text>
+          {snag.status === 'in_progress' && (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnResolve]}
+              onPress={() => updateStatusMutation.mutate('resolved')}
+            >
+              <Text style={styles.btnText}>Kusuru Çözüldü Yap</Text>
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.btnGray]}
-          disabled={updating}
-          onPress={() => updateStatus('open')}
-        >
-          {updating ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.actionBtnText}>Tekrar Aç (Open)</Text>
+          {snag.status === 'resolved' && (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnApprove]}
+              onPress={() => updateStatusMutation.mutate('approved')}
+            >
+              <Text style={styles.btnText}>Kusuru Onayla & Kapat</Text>
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
+
+          {snag.status === 'approved' && (
+            <View style={styles.approvedInfo}>
+              <Text style={styles.approvedText}>✓ Bu kusur onaylanmış ve kapatılmıştır.</Text>
+            </View>
+          )}
+        </View>
       </View>
     </ScrollView>
   );
@@ -186,90 +231,143 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingText: {
-    marginTop: 12,
+    marginTop: 10,
     color: '#6c757d',
     fontSize: 14,
+  },
+  errorText: {
+    color: '#dc3545',
+    fontSize: 15,
+    fontWeight: 'bold',
   },
   card: {
     backgroundColor: '#ffffff',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 18,
     elevation: 3,
     shadowColor: '#000000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 6,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#212529',
-    marginBottom: 8,
-  },
-  description: {
-    fontSize: 15,
-    color: '#495057',
-    lineHeight: 22,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#e9ecef',
-    marginVertical: 14,
-  },
-  row: {
+  headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    alignItems: 'flex-start',
+    gap: 8,
   },
-  label: {
-    fontSize: 14,
-    color: '#6c757d',
-    fontWeight: '500',
-  },
-  value: {
-    fontSize: 14,
+  title: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: 'bold',
     color: '#212529',
+  },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  badgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  badge_critical: { backgroundColor: '#842029' },
+  badge_high: { backgroundColor: '#dc3545' },
+  badge_medium: { backgroundColor: '#fd7e14' },
+  badge_low: { backgroundColor: '#0dcaf0' },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  statusLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6c757d',
+    marginRight: 8,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  statusBadgeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  statusBadge_open: { backgroundColor: '#6c757d' },
+  statusBadge_in_progress: { backgroundColor: '#0056b3' },
+  statusBadge_resolved: { backgroundColor: '#198754' },
+  statusBadge_approved: { backgroundColor: '#0f5132' },
+  divider: {
+    height: 1,
+    backgroundColor: '#f1f3f5',
+    marginVertical: 14,
+  },
+  sectionHeading: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#495057',
+    marginBottom: 6,
+  },
+  descriptionText: {
+    fontSize: 15,
+    color: '#343a40',
+    lineHeight: 22,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  metaLabel: {
+    fontSize: 13,
+    color: '#6c757d',
     fontWeight: '600',
   },
-  priorityText: {
-    color: '#dc3545',
+  metaValue: {
+    fontSize: 13,
+    color: '#212529',
     fontWeight: 'bold',
+    flexShrink: 1,
+    textAlign: 'right',
   },
-  statusText: {
-    color: '#0d6efd',
-    fontWeight: 'bold',
+  actionCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 16,
+    marginTop: 14,
+    elevation: 3,
   },
-  sectionHeader: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#495057',
-    marginTop: 24,
-    marginBottom: 12,
+  actionButtonsRow: {
+    marginTop: 8,
+    gap: 8,
   },
-  actionsContainer: {
-    gap: 10,
-  },
-  actionBtn: {
-    paddingVertical: 14,
-    borderRadius: 10,
+  btn: {
+    paddingVertical: 12,
+    borderRadius: 8,
     alignItems: 'center',
-    elevation: 2,
   },
-  btnBlue: {
-    backgroundColor: '#0d6efd',
-  },
-  btnGreen: {
-    backgroundColor: '#198754',
-  },
-  btnGray: {
-    backgroundColor: '#6c757d',
-  },
-  actionBtnText: {
+  btnProgress: { backgroundColor: '#0056b3' },
+  btnResolve: { backgroundColor: '#198754' },
+  btnApprove: { backgroundColor: '#0f5132' },
+  btnText: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
+  },
+  approvedInfo: {
+    paddingVertical: 10,
+    backgroundColor: '#d1e7dd',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  approvedText: {
+    color: '#0f5132',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 });
