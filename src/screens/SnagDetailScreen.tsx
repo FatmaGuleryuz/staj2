@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Image,
 } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -120,6 +121,15 @@ export default function SnagDetailScreen({ route }: Props) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.card}>
+        {/* Hasar Fotoğrafı */}
+        {snag.image_url ? (
+          <Image source={{ uri: snag.image_url }} style={styles.snagImage} />
+        ) : (
+          <View style={styles.noImagePlaceholder}>
+            <Text style={styles.noImageText}>📷 Fotoğraf Eklenmemiş</Text>
+          </View>
+        )}
+
         <View style={styles.headerRow}>
           <Text style={styles.title}>{snag.title}</Text>
           <View style={[styles.badge, styles[`badge_${snag.priority}`]]}>
@@ -217,29 +227,11 @@ export default function SnagDetailScreen({ route }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f4f6f9',
-  },
-  content: {
-    padding: 16,
-    paddingBottom: 40,
-  },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    color: '#6c757d',
-    fontSize: 14,
-  },
-  errorText: {
-    color: '#dc3545',
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, backgroundColor: '#f4f6f9' },
+  content: { padding: 16, paddingBottom: 40 },
+  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { marginTop: 10, color: '#6c757d', fontSize: 14 },
+  errorText: { color: '#dc3545', fontSize: 15, fontWeight: 'bold' },
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 14,
@@ -250,124 +242,55 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 6,
   },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 8,
+  snagImage: {
+    width: '100%',
+    height: 210,
+    borderRadius: 10,
+    marginBottom: 16,
+    resizeMode: 'cover',
   },
-  title: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#212529',
+  noImagePlaceholder: {
+    width: '100%',
+    height: 100,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e9ecef',
+    borderStyle: 'dashed',
   },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  badgeText: {
-    color: '#ffffff',
-    fontSize: 11,
-    fontWeight: 'bold',
-  },
+  noImageText: { color: '#adb5bd', fontSize: 13, fontWeight: '500' },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
+  title: { flex: 1, fontSize: 18, fontWeight: 'bold', color: '#212529' },
+  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  badgeText: { color: '#ffffff', fontSize: 11, fontWeight: 'bold' },
   badge_critical: { backgroundColor: '#842029' },
   badge_high: { backgroundColor: '#dc3545' },
   badge_medium: { backgroundColor: '#fd7e14' },
   badge_low: { backgroundColor: '#0dcaf0' },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  statusLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6c757d',
-    marginRight: 8,
-  },
-  statusBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  statusBadgeText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
+  statusContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
+  statusLabel: { fontSize: 14, fontWeight: '600', color: '#6c757d', marginRight: 8 },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  statusBadgeText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold' },
   statusBadge_open: { backgroundColor: '#6c757d' },
   statusBadge_in_progress: { backgroundColor: '#0056b3' },
   statusBadge_resolved: { backgroundColor: '#198754' },
   statusBadge_approved: { backgroundColor: '#0f5132' },
-  divider: {
-    height: 1,
-    backgroundColor: '#f1f3f5',
-    marginVertical: 14,
-  },
-  sectionHeading: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#495057',
-    marginBottom: 6,
-  },
-  descriptionText: {
-    fontSize: 15,
-    color: '#343a40',
-    lineHeight: 22,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  metaLabel: {
-    fontSize: 13,
-    color: '#6c757d',
-    fontWeight: '600',
-  },
-  metaValue: {
-    fontSize: 13,
-    color: '#212529',
-    fontWeight: 'bold',
-    flexShrink: 1,
-    textAlign: 'right',
-  },
-  actionCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 16,
-    marginTop: 14,
-    elevation: 3,
-  },
-  actionButtonsRow: {
-    marginTop: 8,
-    gap: 8,
-  },
-  btn: {
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
+  divider: { height: 1, backgroundColor: '#f1f3f5', marginVertical: 14 },
+  sectionHeading: { fontSize: 14, fontWeight: '700', color: '#495057', marginBottom: 6 },
+  descriptionText: { fontSize: 15, color: '#343a40', lineHeight: 22 },
+  metaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  metaLabel: { fontSize: 13, color: '#6c757d', fontWeight: '600' },
+  metaValue: { fontSize: 13, color: '#212529', fontWeight: 'bold', flexShrink: 1, textAlign: 'right' },
+  actionCard: { backgroundColor: '#ffffff', borderRadius: 14, padding: 16, marginTop: 14, elevation: 3 },
+  actionButtonsRow: { marginTop: 8, gap: 8 },
+  btn: { paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
   btnProgress: { backgroundColor: '#0056b3' },
   btnResolve: { backgroundColor: '#198754' },
   btnApprove: { backgroundColor: '#0f5132' },
-  btnText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  approvedInfo: {
-    paddingVertical: 10,
-    backgroundColor: '#d1e7dd',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  approvedText: {
-    color: '#0f5132',
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
+  btnText: { color: '#ffffff', fontSize: 14, fontWeight: 'bold' },
+  approvedInfo: { paddingVertical: 10, backgroundColor: '#d1e7dd', borderRadius: 8, alignItems: 'center' },
+  approvedText: { color: '#0f5132', fontWeight: 'bold', fontSize: 14 },
 });
