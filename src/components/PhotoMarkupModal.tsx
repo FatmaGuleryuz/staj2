@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   StyleSheet,
   View,
@@ -12,15 +12,21 @@ import { WebView } from 'react-native-webview';
 
 interface Props {
   visible: boolean;
+  imageBase64?: string | null;
   imageUri: string | null;
   onClose: () => void;
   onSave: (annotatedBase64: string) => void;
 }
 
-export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }: Props) {
+export default function PhotoMarkupModal({ visible, imageBase64, imageUri, onClose, onSave }: Props) {
   const webViewRef = useRef<WebView>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
-  if (!visible || !imageUri) return null;
+  if (!visible) return null;
+
+  const validImageSource = imageBase64
+    ? (imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`)
+    : (imageUri || '');
 
   const htmlContent = `
     <!DOCTYPE html>
@@ -29,9 +35,9 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <style>
           * { box-sizing: border-box; margin: 0; padding: 0; }
-          body, html { width: 100%; height: 100%; overflow: hidden; background-color: #000; }
-          #container { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-          canvas { position: absolute; touch-action: none; }
+          body, html { width: 100vw; height: 100vh; overflow: hidden; background-color: #121212; display: flex; align-items: center; justify-content: center; }
+          #container { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; position: relative; }
+          canvas { touch-action: none; display: block; }
         </style>
       </head>
       <body>
@@ -42,25 +48,36 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
           const canvas = document.getElementById('paintCanvas');
           const ctx = canvas.getContext('2d');
           const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.src = "${imageUri}";
-
           let isDrawing = false;
 
-          img.onload = () => {
-            const containerW = window.innerWidth;
-            const containerH = window.innerHeight;
-            
-            const scale = Math.min(containerW / img.width, containerH / img.height);
+          function sendToRN(payload) {
+            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+              window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+            }
+          }
+
+          img.onload = function() {
+            const screenW = window.innerWidth;
+            const screenH = window.innerHeight;
+
+            const scale = Math.min(screenW / img.width, screenH / img.height);
             canvas.width = img.width * scale;
             canvas.height = img.height * scale;
 
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            ctx.strokeStyle = '#dc3545'; // Kırmızı İşaret Kalemi
+            ctx.strokeStyle = '#ff0000';
             ctx.lineWidth = 4;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
+
+            sendToRN({ type: 'LOADED' });
           };
+
+          img.onerror = function() {
+            sendToRN({ type: 'ERROR' });
+          };
+
+          img.src = "${validImageSource}";
 
           function getPos(e) {
             const rect = canvas.getBoundingClientRect();
@@ -92,17 +109,21 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
             isDrawing = false;
           });
 
-          // React Native'den mesaj dinle (Kaydet / Sıfırla)
-          window.addEventListener('message', (e) => {
-            if (e.data === 'SAVE') {
+          // Global erişilebilir işlemler
+          window.clearCanvas = function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          };
+
+          window.saveCanvas = function() {
+            try {
               const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
               const base64 = dataUrl.split(',')[1];
-              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'SAVE', base64: base64 }));
-            } else if (e.data === 'CLEAR') {
-              ctx.clearRect(0, 0, canvas.width, canvas.height);
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              sendToRN({ type: 'SAVE', base64: base64 });
+            } catch (err) {
+              sendToRN({ type: 'ERROR', message: err.message });
             }
-          });
+          };
         </script>
       </body>
     </html>
@@ -111,12 +132,22 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
   const handleMessage = (event: any) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
-      if (msg.type === 'SAVE' && msg.base64) {
+      if (msg.type === 'LOADED') {
+        setImageLoaded(true);
+      } else if (msg.type === 'SAVE' && msg.base64) {
         onSave(msg.base64);
       }
     } catch (err) {
-      console.error('Canvas Mesaj Hatası:', err);
+      console.error('Markup Mesaj Hatası:', err);
     }
+  };
+
+  const handleClear = () => {
+    webViewRef.current?.injectJavaScript('window.clearCanvas && window.clearCanvas(); true;');
+  };
+
+  const handleSave = () => {
+    webViewRef.current?.injectJavaScript('window.saveCanvas && window.saveCanvas(); true;');
   };
 
   return (
@@ -127,10 +158,7 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
             <Text style={styles.headerBtnText}>✕ Kapat</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>✏️ Hasarı Çiz / İşaretle</Text>
-          <TouchableOpacity
-            onPress={() => webViewRef.current?.postMessage('CLEAR')}
-            style={styles.headerBtn}
-          >
+          <TouchableOpacity onPress={handleClear} style={styles.headerBtn}>
             <Text style={styles.clearBtnText}>Sıfırla</Text>
           </TouchableOpacity>
         </View>
@@ -142,17 +170,25 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
             source={{ html: htmlContent }}
             style={styles.webView}
             scrollEnabled={false}
+            allowFileAccess={true}
+            allowFileAccessFromFileURLs={true}
+            allowUniversalAccessFromFileURLs={true}
             onMessage={handleMessage}
-            renderLoading={() => <ActivityIndicator size="large" color="#ffffff" />}
+            mixedContentMode="always"
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
           />
+          {!imageLoaded && (
+            <View style={styles.loaderOverlay}>
+              <ActivityIndicator size="large" color="#ffffff" />
+              <Text style={styles.loaderText}>Görsel tuvale aktarılıyor...</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.footer}>
           <Text style={styles.hintText}>Parmağınızla hasarlı bölgeyi daire içine alınız.</Text>
-          <TouchableOpacity
-            style={styles.confirmBtn}
-            onPress={() => webViewRef.current?.postMessage('SAVE')}
-          >
+          <TouchableOpacity style={styles.confirmBtn} onPress={handleSave}>
             <Text style={styles.confirmBtnText}>✓ Çizimi Onayla ve Kullan</Text>
           </TouchableOpacity>
         </View>
@@ -162,7 +198,10 @@ export default function PhotoMarkupModal({ visible, imageUri, onClose, onSave }:
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#121212' },
+  container: {
+    flex: 1,
+    backgroundColor: '#121212',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -171,19 +210,54 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#1e1e1e',
   },
-  headerTitle: { color: '#ffffff', fontSize: 16, fontWeight: 'bold' },
-  headerBtn: { padding: 6 },
-  headerBtnText: { color: '#adb5bd', fontSize: 14, fontWeight: '600' },
-  clearBtnText: { color: '#fd7e14', fontSize: 14, fontWeight: 'bold' },
-  canvasWrapper: { flex: 1, backgroundColor: '#000000' },
-  webView: { flex: 1, backgroundColor: 'transparent' },
+  headerTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  headerBtn: {
+    padding: 6,
+  },
+  headerBtnText: {
+    color: '#adb5bd',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  clearBtnText: {
+    color: '#fd7e14',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  canvasWrapper: {
+    flex: 1,
+    backgroundColor: '#000000',
+    position: 'relative',
+  },
+  webView: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  loaderOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loaderText: {
+    color: '#ffffff',
+    marginTop: 8,
+    fontSize: 13,
+  },
   footer: {
     padding: 16,
     backgroundColor: '#1e1e1e',
     alignItems: 'center',
     gap: 10,
   },
-  hintText: { color: '#adb5bd', fontSize: 12 },
+  hintText: {
+    color: '#adb5bd',
+    fontSize: 12,
+  },
   confirmBtn: {
     backgroundColor: '#198754',
     width: '100%',
@@ -191,5 +265,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
-  confirmBtnText: { color: '#ffffff', fontSize: 15, fontWeight: 'bold' },
+  confirmBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
 });

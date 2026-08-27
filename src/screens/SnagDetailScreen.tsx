@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,6 +14,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { Snag, SnagStatus } from '../types/database';
 import { supabase } from '../lib/supabase';
+import SignatureModal from '../components/SignatureModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SnagDetail'>;
 
@@ -74,9 +75,10 @@ async function fetchSnagDetail(snagId: string): Promise<Snag> {
   return data as unknown as Snag;
 }
 
-export default function SnagDetailScreen({ route }: Props) {
+export default function SnagDetailScreen({ route, navigation }: Props) {
   const { snagId } = route.params;
   const queryClient = useQueryClient();
+  const [signModalVisible, setSignModalVisible] = useState(false);
 
   const { data: snag, isLoading, isError } = useQuery({
     queryKey: ['snag', snagId],
@@ -101,6 +103,28 @@ export default function SnagDetailScreen({ route }: Props) {
     },
   });
 
+  const handleSaveSignature = async (base64Sign: string) => {
+    setSignModalVisible(false);
+    try {
+      const signatureDataUri = `data:image/png;base64,${base64Sign}`;
+      const { error } = await supabase
+        .from('snags')
+        .update({
+          status: 'approved',
+          signature_url: signatureDataUri,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', snagId);
+
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['snag', snagId] });
+      await queryClient.invalidateQueries({ queryKey: ['snags'] });
+      Alert.alert('Onaylandı', 'Kusur dijital imza ile onaylanıp kapatıldı.');
+    } catch (err: any) {
+      Alert.alert('Hata', err.message || 'İmza kaydedilemedi.');
+    }
+  };
+
   if (isLoading) {
     return (
       <View style={styles.centerContainer}>
@@ -117,6 +141,8 @@ export default function SnagDetailScreen({ route }: Props) {
       </View>
     );
   }
+
+  const canEdit = snag.status === 'open' || snag.status === 'in_progress';
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -182,7 +208,26 @@ export default function SnagDetailScreen({ route }: Props) {
             })}
           </Text>
         </View>
+
+        {/* Onaylanmış Dijital İmza Varsa Göster */}
+        {snag.signature_url && (
+          <View style={styles.signatureSection}>
+            <View style={styles.divider} />
+            <Text style={styles.sectionHeading}>✍️ Yetkili Onay İmzası</Text>
+            <Image source={{ uri: snag.signature_url }} style={styles.signatureImage} />
+          </View>
+        )}
       </View>
+
+      {/* Düzenleme Butonu */}
+      {canEdit && (
+        <TouchableOpacity
+          style={styles.editButton}
+          onPress={() => navigation.navigate('CreateSnag', { snagId: snag.id })}
+        >
+          <Text style={styles.editButtonText}>✏️ Bilgileri / Sorumluyu Düzenle</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Durum Yönetim Butonları */}
       <View style={styles.actionCard}>
@@ -209,19 +254,26 @@ export default function SnagDetailScreen({ route }: Props) {
           {snag.status === 'resolved' && (
             <TouchableOpacity
               style={[styles.btn, styles.btnApprove]}
-              onPress={() => updateStatusMutation.mutate('approved')}
+              onPress={() => setSignModalVisible(true)}
             >
-              <Text style={styles.btnText}>Kusuru Onayla & Kapat</Text>
+              <Text style={styles.btnText}>✍️ İmzala ve Onayla</Text>
             </TouchableOpacity>
           )}
 
           {snag.status === 'approved' && (
             <View style={styles.approvedInfo}>
-              <Text style={styles.approvedText}>✓ Bu kusur onaylanmış ve kapatılmıştır.</Text>
+              <Text style={styles.approvedText}>✓ Bu kusur dijital imza ile onaylanıp kapatılmıştır.</Text>
             </View>
           )}
         </View>
       </View>
+
+      {/* Dijital İmza Modalı */}
+      <SignatureModal
+        visible={signModalVisible}
+        onClose={() => setSignModalVisible(false)}
+        onSave={handleSaveSignature}
+      />
     </ScrollView>
   );
 }
@@ -284,6 +336,27 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   metaLabel: { fontSize: 13, color: '#6c757d', fontWeight: '600' },
   metaValue: { fontSize: 13, color: '#212529', fontWeight: 'bold', flexShrink: 1, textAlign: 'right' },
+  signatureSection: { marginTop: 4 },
+  signatureImage: {
+    width: '100%',
+    height: 100,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    resizeMode: 'contain',
+    marginTop: 6,
+  },
+  editButton: {
+    backgroundColor: '#e7f1ff',
+    borderWidth: 1,
+    borderColor: '#b6d4fe',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  editButtonText: { color: '#0056b3', fontSize: 15, fontWeight: 'bold' },
   actionCard: { backgroundColor: '#ffffff', borderRadius: 14, padding: 16, marginTop: 14, elevation: 3 },
   actionButtonsRow: { marginTop: 8, gap: 8 },
   btn: { paddingVertical: 12, borderRadius: 8, alignItems: 'center' },

@@ -16,10 +16,12 @@ import {
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
+import NetInfo from '@react-native-community/netinfo';
 import { RootStackParamList } from '../types/navigation';
 import { SnagPriority } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { pickOrTakePhoto, uploadImageToSupabase } from '../lib/storage';
+import { saveSnagOffline } from '../lib/offlineQueue';
 import PhotoMarkupModal from '../components/PhotoMarkupModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'CreateSnag'>;
@@ -201,9 +203,36 @@ export default function CreateSnagScreen({ route, navigation }: Props) {
     }
 
     const fullLocationTitle = `${selectedBlok} - ${selectedKat} - ${selectedDaire}`;
-
     setSaving(true);
+
     try {
+      // 1. Ağ bağlantısını kontrol et
+      const netState = await NetInfo.fetch();
+      const isOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
+
+      // Çevrimdışı (Offline) Durum
+      if (!isOnline && !isEditMode) {
+        await saveSnagOffline({
+          company_id: selectedUser.company_id || '11111111-1111-1111-1111-111111111111',
+          title: title.trim(),
+          description: description.trim(),
+          location_title: fullLocationTitle,
+          priority: priority,
+          status: 'open',
+          assigned_to_user_id: selectedUser.id,
+          created_by_user_id: '22222222-2222-2222-2222-222222222222',
+          local_image: selectedImage?.uri || null,
+        });
+
+        Alert.alert(
+          '📶 Çevrimdışı Kayıt',
+          'İnternet bağlantısı bulunamadı. Kusur kaydı cihaz hafızasına kaydedildi. Bağlantı geldiğinde senkronize edilecektir.',
+          [{ text: 'Tamam', onPress: () => navigation.goBack() }]
+        );
+        return;
+      }
+
+      // Çevrimiçi (Online) Durum
       let finalImageUrl = existingImageUrl;
       if (selectedImage) {
         const uploadedUrl = await uploadImageToSupabase(selectedImage);
@@ -319,6 +348,7 @@ export default function CreateSnagScreen({ route, navigation }: Props) {
           onChangeText={setTitle}
         />
 
+        {/* 2. Konum / Alan Seçimi */}
         <Text style={styles.label}>2. Konum / Alan *</Text>
         <View style={styles.locationSelectorsRow}>
           {/* Blok Seçimi */}
