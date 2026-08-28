@@ -18,6 +18,7 @@ import { RootStackParamList } from '../types/navigation';
 import { Snag, SnagStatus } from '../types/database';
 import { supabase } from '../lib/supabase';
 import { useSnagStore } from '../store/useSnagStore';
+import { useSyncEngine } from '../hooks/useSyncEngine';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SnagList'>;
 
@@ -55,7 +56,9 @@ async function fetchSnags(): Promise<Snag[]> {
   return (data as unknown as Snag[]) || [];
 }
 
+
 export default function SnagListScreen({ navigation }: Props) {
+   useSyncEngine();
   const { searchQuery, selectedStatus, setSearchQuery, setSelectedStatus } = useSnagStore();
   const searchInputRef = useRef<TextInput>(null);
   const isKeyboardVisibleRef = useRef(false);
@@ -64,6 +67,7 @@ export default function SnagListScreen({ navigation }: Props) {
     queryKey: ['snags'],
     queryFn: fetchSnags,
   });
+ 
 
   // Klavye görünürlük durumunu anlık takip etme
   useEffect(() => {
